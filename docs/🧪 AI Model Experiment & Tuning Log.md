@@ -25,9 +25,6 @@ The math overwhelmed the gradients. The model quickly realized that outputting m
 2. **Increase Training Time:** 15 epochs is vastly insufficient. Increase to **50 epochs**.
 3. **Architecture Adjustment:** Change the final linear layer from `Linear(64, 2)` to `Linear(64, 1)` since we are only predicting speed for this next test.
 
-### 📈 Visual Result
-
-![[Pasted image 20260903002155.png]]
 ## 🔴 Iteration 2: Pure MSE Loss & Increased Epochs
 **Date:** 2026-09-03
 **Objective:** Eliminate Gaussian NLL instability, force the model to learn raw speed mappings via standard MSE, and increase training duration to 50 epochs.
@@ -55,6 +52,5 @@ This means the AI completely memorized Driver E's specific engine vibrations, su
 2. **Learning Rate Scheduler:** The Validation Loss bounced around erratically (1300 -> 2000 -> 1600). A \ReduceLROnPlateau\ scheduler is needed to smooth out the learning.
 3. **Feature Engineering (Phase 3 Consideration):** If regularization fails, we will need to update \preprocess.py\ to extract Frequency Domain features (FFT). Engine RPM frequencies transfer much better between vehicles than raw vibration amplitudes.
 
-### 📈 Visual Result
 
-![[Pasted image 20260903004157.png]]
+
