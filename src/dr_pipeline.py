@@ -330,7 +330,10 @@ def monte_carlo(n_seeds=10):
         summary[k] = dict(mean_pct=round(float(v.mean()), 3), std_pct=round(float(v.std()), 3),
                            min_pct=round(float(v.min()), 3), max_pct=round(float(v.max()), 3),
                            n_seeds=n_seeds, raw=v.round(3).tolist())
-    with open('/home/claude/idr_prelim/monte_carlo.json', 'w') as f:
+    import os
+    results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
+    os.makedirs(results_dir, exist_ok=True)
+    with open(os.path.join(results_dir, 'monte_carlo.json'), 'w') as f:
         json.dump(summary, f, indent=2)
     print("\n=== Monte Carlo (n=%d random seeds) drift %% of distance ===" % n_seeds)
     for k, v in summary.items():
@@ -370,10 +373,13 @@ if __name__ == "__main__":
     for r in results:
         r2 = {k: v for k, v in r.items() if k != 'error_trace'}
         out.append(r2)
-    with open('/home/claude/idr_prelim/results.json', 'w') as f:
+    import os
+    results_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
+    os.makedirs(results_dir, exist_ok=True)
+    with open(os.path.join(results_dir, 'results.json'), 'w') as f:
         json.dump({'benchmark_met': bool(benchmark_met), 'cases': out}, f, indent=2)
 
-    np.savez('/home/claude/idr_prelim/traces.npz',
+    np.savez(os.path.join(results_dir, 'traces.npz'),
               gt_x=gt['x'], gt_y=gt['y'], time=gt['time'],
               xa=xa, ya=ya, xb=xb, yb=yb, xc=xc, yc=yc, xd=xd, yd=yd,
               err_a=m_a['error_trace'], err_b=m_b['error_trace'],
