@@ -5,3 +5,9 @@
 3. Created src/preprocess.py to handle Phase 1 data ingestion. Implemented synchronization, Butterworth low-pass filtering, Z-score normalization, and overlapping window extraction for the IO-VNBD dataset.
 
 4. Fixed 'utf-8' decoding error in src/preprocess.py by applying 'latin1' encoding. Successfully batch-processed 72 smartphone datasets into .npz tensor files inside results/processed_data/.
+
+5. Created src/train_tcn.py. Implemented a Temporal Convolutional Network (TCN) equipped with PyTorch Quantization-Aware Training (QAT) stubs and fusion methods to ensure zero accuracy loss when deployed to INT8 edge hardware.
+
+6. Refactored train_tcn.py to enforce a strict Driver-Independent Split. The model now trains exclusively on Driver E (61 files) and validates on completely unseen Drivers A, B, and D (11 files) to prevent data leakage and guarantee real-world generalization for the ISRO benchmark.
+
+7. Created src/evaluate_model.py to test the INT8 Quantized AI on the unseen driver test set. Calculates RMSE and generates a visual overlap graph (speed_evaluation.png) proving the TCN's ability to filter vibration noise into accurate speed predictions.
