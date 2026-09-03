@@ -15,7 +15,7 @@
 | **Project Title** | AI-ML based Intelligent Dead Reckoning for GNSS-Denied Environments |
 | **Problem Statement**| ISRO Problem Statement 26168 |
 | **Repository Root** | `D:\Dead Reckoning Nav System\Dead-reckoning-system-for-seamless-navigation\` |
-| **Current Phase** | Phase 2 (EKF Integration) — TCN trained (Iteration 6, RMSE 28.80), now integrating with EKF for real-data drift validation. |
+| **Current Phase** | Phase 2 (Core Engine) — Python EKF logic successfully ported to C++ (Eigen). Next: TFLite Integration. |
 | **Goal** | Train a TCN to predict velocity from IMU data → Fuse with Error-State EKF + NHC → Maintain <10% drift over 1km without GNSS. |
 | **Target Hardware** | Edge Devices (Smartphones / FOG-class Navigation Engines) |
 | **Dataset** | IO-VNBD Dataset (High-frequency Smartphone IMU + Vehicle GPS Ground Truth) |
@@ -30,6 +30,7 @@ D:\Dead Reckoning Nav System\Dead-reckoning-system-for-seamless-navigation\
 │
 ├── .git/                          # Git version control
 ├── .gitignore                     # Ignores: venv, __pycache__, data/, results/*.npz
+├── cpp_engine/                    # C++ Core Engine (EKF & TFLite port)
 ├── data/                          # Raw IO-VNBD datasets (GITIGNORED)
 ├── docs/                          # Documentation, logs, architecture plans, and THIS map
 ├── results/                       # Outputs, metrics, and plots from pipeline runs
@@ -59,7 +60,21 @@ D:\Dead Reckoning Nav System\Dead-reckoning-system-for-seamless-navigation\
 
 ---
 
-### 2. `src/` — Source Code (Pipeline & ML)
+### 2. `cpp_engine/` — Core Engine (C++)
+
+> **Purpose**: High-performance port of the EKF pipeline, designed to run directly on edge devices (Smartphones / FOG engines).
+
+| File / Folder | Description |
+|---|---|
+| `CMakeLists.txt` | Build configuration; automatically downloads Eigen3 via FetchContent. |
+| `build.py` | Python fallback script to compile the engine using MinGW `g++`. |
+| `include/ekf.h` | 8-State Error-State EKF header file (Eigen matrix definitions). |
+| `src/ekf.cpp` | C++ implementation of the prediction, NHC, Velocity, and GPS updates. |
+| `src/main.cpp` | Entry point for testing the C++ filter. |
+
+---
+
+### 3. `src/` — Source Code (Pipeline & ML)
 
 > **Purpose**: Contains all Python scripts for data processing, model training, and filter execution. Must be executed in sequential pipeline order.
 
@@ -68,12 +83,14 @@ D:\Dead Reckoning Nav System\Dead-reckoning-system-for-seamless-navigation\
 | 1 | `preprocess.py` | **Data Preparation** | Synchronizes Smartphone (S) and Vehicle (V) CSVs, applies Butterworth low-pass filter (10Hz cutoff), normalizes via Z-score, and slices into 1-second overlapping windows. Outputs `.npz` tensors. |
 | 2 | `train_tcn.py` | **AI Training** | PyTorch script that implements Quantization-Aware Training (QAT) on a TCN. Outputs a highly compressed INT8 model (`tiny_tcn_qat_int8.pth`) designed to predict velocity and variance on edge hardware. |
 | 3 | `evaluate_model.py` | **AI Evaluation** | Evaluates the INT8 model on unseen routes. Calculates RMSE, MAE, and outputs a visual line graph (`speed_evaluation.png`) comparing AI-predicted speed vs. true speed. |
-| 4 | `integrate_tcn_ekf.py` | **TCN → EKF Integration** | Connects the trained TCN velocity estimator to the Error-State EKF. Loads real IO-VNBD sessions, simulates 60s GPS outage, runs AI dead reckoning, and calculates position drift percentage (ISRO metric). Outputs `tcn_ekf_integration.png` and `tcn_ekf_results.json`. |
-| 5 | `dr_pipeline.py` | **Validation & EKF** | Core dead-reckoning mathematical baseline. Implements Naive double integration vs. full Error-State EKF + NHC + velocity-aiding. Validates the architecture's ability to hit <10% drift on synthetic data. |
+| 4 | `residual_analysis.py` | **Statistical Diagnostics** | Generates Data Science diagnostic plots (Distribution, ACF, Heteroscedasticity, Time-Series Overlay) to mathematically prove the need for EKF smoothing. |
+| 5 | `integrate_tcn_ekf.py` | **TCN → EKF Integration** | Connects the trained TCN velocity estimator to the Error-State EKF. Loads real IO-VNBD sessions, simulates 60s GPS outage, runs AI dead reckoning, and calculates position drift percentage (ISRO metric). Outputs `tcn_ekf_integration.png` and `tcn_ekf_results.json`. |
+| 6 | `dr_pipeline.py` | **Validation & EKF** | Core dead-reckoning mathematical baseline. Implements Naive double integration vs. full Error-State EKF + NHC + velocity-aiding. Validates the architecture's ability to hit <10% drift on synthetic data. |
+| 7 | `export_model.py` | **Model Export** | Reconstructs the trained INT8 model into a clean architecture and exports it as a universal `tiny_tcn.onnx` file for the Android/Flutter C++ deployment. |
 
 ---
 
-### 3. `data/` — Datasets
+### 4. `data/` — Datasets
 
 > **Path**: `data/`
 > **Git Status**: ⛔ GITIGNORED (too large)
@@ -87,7 +104,7 @@ D:\Dead Reckoning Nav System\Dead-reckoning-system-for-seamless-navigation\
 
 ---
 
-### 4. `results/` — Pipeline Outputs
+### 5. `results/` — Pipeline Outputs
 
 > **Path**: `results/`
 > **Purpose**: Generated files from running the scripts in `src/`.
@@ -97,6 +114,8 @@ D:\Dead Reckoning Nav System\Dead-reckoning-system-for-seamless-navigation\
 | `processed_data/` | ⛔ Ignored | Folder containing 72 `.npz` tensor files generated by `preprocess.py`. |
 | `processed_data/global_scaler.pkl` | ⛔ Ignored | Dataset-wide StandardScaler fitted across all 72 files. Used for consistent inference-time normalization. |
 | `saved_models/tiny_tcn_qat_int8.pth` | ✅ Tracked | INT8 Quantized TCN model (Iteration 6). 4-block architecture, 11 input channels, RMSE 28.80. |
+| `saved_models/tiny_tcn.onnx` | ✅ Tracked | Universal Float32 ONNX graph. Extracted precisely from the INT8 model for edge deployment in C++/Flutter. |
+| `residual_plots/` | ✅ Tracked | Directory containing 4 diagnostic plots (ACF, KDE, etc.) from `residual_analysis.py`. |
 | `speed_evaluation.png` | ✅ Tracked | Line graph overlaying True Speed vs AI-Predicted Speed from unseen testing data. |
 | `tcn_ekf_integration.png` | ✅ Tracked | Trajectory comparison plot: GPS ground truth vs AI dead reckoning during simulated GPS outage. |
 | `tcn_ekf_results.json` | ✅ Tracked | Position drift percentage and error metrics from the TCN+EKF integration test. |
