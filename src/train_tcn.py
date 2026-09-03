@@ -75,7 +75,7 @@ class TCNVelocityEstimator(nn.Module):
         
         self.fc1 = nn.Linear(128, 64)
         self.relu_fc = nn.ReLU()
-        self.dropout = nn.Dropout(0.2)
+        self.dropout = nn.Dropout(0.4) # Increased for Iteration 3
         self.fc2 = nn.Linear(64, 1)
         self.dequant = DeQuantStub()
 
@@ -133,7 +133,9 @@ if __name__ == "__main__":
     model.qconfig = quant.get_default_qat_qconfig('qnnpack')
     quant.prepare_qat(model, inplace=True)
     
-    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    # Iteration 3 Regularization: Added weight_decay (L2) and LR Scheduler
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE, weight_decay=1e-4)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=5)
     criterion = nn.MSELoss()
     
     for epoch in range(EPOCHS):
@@ -163,7 +165,11 @@ if __name__ == "__main__":
                 
         avg_val_loss = total_val_loss / len(test_loader)
         
-        print(f"Epoch [{epoch+1}/{EPOCHS}] | Train Loss: {avg_train_loss:.4f} | Unseen Val Loss: {avg_val_loss:.4f}")
+        scheduler.step(avg_val_loss)
+        
+        # Get current LR for logging
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch [{epoch+1}/{EPOCHS}] | LR: {current_lr:.6f} | Train Loss: {avg_train_loss:.4f} | Unseen Val Loss: {avg_val_loss:.4f}")
         
     # CONVERT TO INT8
     print("\nTraining finished. Converting model to INT8...")

@@ -54,3 +54,34 @@ This means the AI completely memorized Driver E's specific engine vibrations, su
 
 
 
+
+---
+
+## 🔴 Iteration 3: Strong Regularization & LR Scheduling
+**Date:** 2026-09-03
+**Objective:** Prevent the severe domain-overfitting seen in Iteration 2 by adding a mathematical "blindfold" (Dropout), weight penalization, and a learning rate scheduler.
+
+### ⚙️ Configuration
+* **Architecture:** 1D TCN (Linear(64, 1))
+* **Loss Function:** MSELoss
+* **Epochs:** 50
+* **Learning Rate:** 1e-3 (with ReduceLROnPlateau scheduler)
+* **Regularization:** Dropout increased to 0.4, Weight Decay (L2) set to 1e-4
+
+### 📊 Results & Metrics
+* **Final Train Loss:** 576.28
+* **Unseen Val Loss:** 1307.35
+* **RMSE:** 35.74
+* **MAE:** 32.01
+
+### 🔍 Analysis & Diagnosis (Why did this happen?)
+**Partial Success, but hitting the limits of Time-Domain Data.**
+The regularization worked exactly as intended! By increasing the Dropout and adding Weight Decay, we successfully stopped the AI from blindly memorizing Driver E's car (Train Loss was restricted to 576, up from 417). Because the AI was forced to look for general patterns instead of memorizing, the Unseen Validation Loss improved massively (dropping from 1778 down to 1307), and the RMSE improved by nearly 3.5 points.
+
+However, an RMSE of 35 is still too high for ISRO's <10% drift requirement. We have hit the mathematical ceiling of what raw, time-domain accelerometer data can provide. Raw vibration amplitudes are too easily biased by a specific car's suspension stiffness or the exact angle the phone is mounted.
+
+### 🛠️ Fixes Required for Iteration 4 (Phase 3: Feature Engineering)
+1. **Frequency Domain Transformation (FFT):** We must update preprocess.py to convert the raw time-series vibration windows into Fast Fourier Transforms (FFT) or Spectrograms. Engine RPMs (frequencies) remain mathematically constant across different cars, whereas raw bump amplitudes do not.
+2. **Update Evaluation Script:** Update the print statement in evaluate_model.py to correctly state "Iteration 4".
+
+
