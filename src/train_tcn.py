@@ -111,8 +111,8 @@ if __name__ == "__main__":
     train_files = [f for f in all_files if '-V' in os.path.basename(f)]
     test_files = [f for f in all_files if '-V' not in os.path.basename(f)]
     
-    print(f"Strict Split: Training on {len(train_files)} files (Driver E).")
-    print(f"Strict Split: Validating on {len(test_files)} unseen files (Drivers A, B, D).")
+    print(f"Strict Split: Training on {len(train_files)} files (Route/Session Group 1).")
+    print(f"Strict Split: Validating on {len(test_files)} unseen files (Route/Session Group 2).")
     
     train_dataset = IMUDataset(train_files)
     test_dataset = IMUDataset(test_files)

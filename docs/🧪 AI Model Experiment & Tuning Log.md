@@ -7,7 +7,7 @@
 * **Loss Function:** Gaussian Negative Log-Likelihood (Gaussian NLL)
 * **Epochs:** 15
 * **Learning Rate:** 1e-3
-* **Data Split:** Driver-Independent (Train: Driver E, Test: Drivers A, B, D)
+* **Data Split:** Session-Independent (Train: Group 1, Test: Group 2)
 
 ### 📊 Results & Metrics
 * **Final Train Loss:** 4.88
@@ -33,7 +33,7 @@ The math overwhelmed the gradients. The model quickly realized that outputting m
 * **Architecture:** 1D Temporal Convolutional Network (TCN) - Output layer reduced to \Linear(64, 1)* **Loss Function:** Mean Squared Error (MSELoss)
 * **Epochs:** 50
 * **Learning Rate:** 1e-3
-* **Data Split:** Driver-Independent (Train: Driver E [64 files], Test: Drivers A, B, D [8 files])
+* **Data Split:** Session-Independent (Train: Group 1 [64 files], Test: Group 2 [8 files])
 
 ### 📊 Results & Metrics
 * **Final Train Loss:** 417.86
@@ -84,4 +84,35 @@ However, an RMSE of 35 is still too high for ISRO's <10% drift requirement. We h
 1. **Frequency Domain Transformation (FFT):** We must update preprocess.py to convert the raw time-series vibration windows into Fast Fourier Transforms (FFT) or Spectrograms. Engine RPMs (frequencies) remain mathematically constant across different cars, whereas raw bump amplitudes do not.
 2. **Update Evaluation Script:** Update the print statement in evaluate_model.py to correctly state "Iteration 4".
 
+
+
+---
+
+## 🔴 Iteration 4: Data Pipeline Bug Fix (Full 6-Channel Activation)
+**Date:** 2026-09-03
+**Objective:** Fix the critical silent-zeroing bug discovered in preprocess.py where Gyro X and Gyro Z were completely missing from the training data. Re-calculate dynamic sampling rates instead of assuming 100Hz.
+
+### ⚙️ Configuration
+* **Architecture:** 1D TCN (Linear(64, 1))
+* **Loss Function:** MSELoss
+* **Epochs:** 50
+* **Learning Rate:** 1e-3 (with ReduceLROnPlateau scheduler)
+* **Regularization:** Dropout 0.4, Weight Decay 1e-4
+* **Data:** **Corrected 6-Channel IO-VNBD Data** with dynamic IMU_FS window scaling.
+
+### 📊 Results & Metrics
+* **Final Train Loss:** 600.62
+* **Unseen Val Loss:** 1225.60
+* **RMSE:** 34.66
+* **MAE:** 30.76
+
+### 🔍 Analysis & Diagnosis
+**Mathematical Improvement, but Time-Domain limits remain.**
+Fixing the data pipeline successfully improved the model! By properly feeding the AI all 6 dimensions of movement (instead of just 4), and fixing the sliding window size by measuring the actual timestamps, the Validation Loss dropped from 1307 to 1225. The RMSE improved by over 1 point and MAE by 1.25 points compared to Iteration 3.
+
+This proves that the missing gyro data was holding the AI back. However, an RMSE of 34.66 confirms our suspicion from Iteration 3: giving the AI *perfect* Time-Domain data still isn't enough to generalize across different car suspensions and phone mounts. We have officially squeezed every drop of performance out of raw time-series data.
+
+### 🛠️ Fixes Required for Iteration 5
+1. **Frequency Domain Transformation (FFT):** As planned, we must now update preprocess.py to extract Frequency Domain features (FFT). This is the only way to bypass the suspension bias and let the AI listen directly to the Engine RPM frequencies.
+2. **Update Architecture:** Widen the TCN input channels to accept the new frequency bins instead of just 6 raw channels.
 

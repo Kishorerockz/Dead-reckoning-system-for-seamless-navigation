@@ -76,7 +76,7 @@ def evaluate():
     mae = np.mean(np.abs(predictions - truths))
     
     print("\n" + "="*40)
-    print("🏆 UNSEEN DRIVER EVALUATION METRICS (ITERATION 2) 🏆")
+    print("🏆 UNSEEN DRIVER EVALUATION METRICS (ITERATION 4) 🏆")
     print("="*40)
     print(f"Root Mean Square Error (RMSE): {rmse:.4f}")
     print(f"Mean Absolute Error (MAE):     {mae:.4f}")
