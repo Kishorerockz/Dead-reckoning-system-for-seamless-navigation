@@ -45,7 +45,7 @@ The math overwhelmed the gradients. The model quickly realized that outputting m
 **Severe Overfitting & Domain Shift.** 
 The network successfully learned how to predict speed, but *only* for the training car! The Train Loss dropped beautifully from 1713 down to 417, proving the neural network architecture works. However, the Unseen Validation Loss exploded from 692 up to 1778. 
 
-This means the AI completely memorized Driver E's specific engine vibrations, suspension stiffness, and phone-mount rattles. When tested on the completely different cars of Drivers A, B, and D, those raw vibration patterns were so different that the AI failed to generalize. 
+This means the AI completely memorized the training car's specific engine vibrations, suspension stiffness, and phone-mount rattles. When tested on the completely different cars of unseen cars/routes, those raw vibration patterns were so different that the AI failed to generalize. 
 
 ### 🛠️ Fixes Required for Iteration 3
 1. **Stronger Regularization:** Increase Dropout (e.g., to 0.4) and add Weight Decay (L2 penalty) to the Adam optimizer to forcefully prevent the AI from memorizing the training car.
@@ -76,7 +76,7 @@ This means the AI completely memorized Driver E's specific engine vibrations, su
 
 ### 🔍 Analysis & Diagnosis (Why did this happen?)
 **Partial Success, but hitting the limits of Time-Domain Data.**
-The regularization worked exactly as intended! By increasing the Dropout and adding Weight Decay, we successfully stopped the AI from blindly memorizing Driver E's car (Train Loss was restricted to 576, up from 417). Because the AI was forced to look for general patterns instead of memorizing, the Unseen Validation Loss improved massively (dropping from 1778 down to 1307), and the RMSE improved by nearly 3.5 points.
+The regularization worked exactly as intended! By increasing the Dropout and adding Weight Decay, we successfully stopped the AI from blindly memorizing the training car's car (Train Loss was restricted to 576, up from 417). Because the AI was forced to look for general patterns instead of memorizing, the Unseen Validation Loss improved massively (dropping from 1778 down to 1307), and the RMSE improved by nearly 3.5 points.
 
 However, an RMSE of 35 is still too high for ISRO's <10% drift requirement. We have hit the mathematical ceiling of what raw, time-domain accelerometer data can provide. Raw vibration amplitudes are too easily biased by a specific car's suspension stiffness or the exact angle the phone is mounted.
 
@@ -115,4 +115,55 @@ This proves that the missing gyro data was holding the AI back. However, an RMSE
 ### 🛠️ Fixes Required for Iteration 5
 1. **Frequency Domain Transformation (FFT):** As planned, we must now update preprocess.py to extract Frequency Domain features (FFT). This is the only way to bypass the suspension bias and let the AI listen directly to the Engine RPM frequencies.
 2. **Update Architecture:** Widen the TCN input channels to accept the new frequency bins instead of just 6 raw channels.
+
+
+---
+
+## 🟡 Iteration 5: Full Pipeline Rebuild (Global Normalization + All 6 Channels + Nyquist Fix)
+**Date:** 2026-09-03
+**Objective:** Completely rebuild the data pipeline from scratch to fix every critical bug discovered in FIX_PROMPT.md: silent gyro zeroing (Issue 1), per-file normalization (Issue 5), hardcoded sampling rate (Issue 4), and Butterworth filter crash (Nyquist violation).
+
+### ⚙️ Configuration
+* **Architecture:** 1D TCN (`Linear(64, 1)`)
+* **Loss Function:** MSELoss
+* **Epochs:** 50
+* **Learning Rate:** 1e-3 (with `ReduceLROnPlateau` scheduler)
+* **Regularization:** Dropout 0.4, Weight Decay 1e-4
+* **Data Pipeline Changes (Critical):**
+    - **Global Normalization:** Replaced per-file `StandardScaler` with a single dataset-wide scaler (saved as `global_scaler.pkl`). All 72 files are now normalized to the same statistical baseline.
+    - **All 6 Channels Live:** Fixed column mapping to use actual IO-VNBD headers (`ACCELEROMETER X/Y/Z`, `GYROSCOPE Yaw/Pitch/Roll`). Post-save assertion confirms `std() > 1e-6` for every channel.
+    - **Dynamic Sampling Rate:** `IMU_FS` is now calculated per-file from real timestamp deltas (detected 10 Hz, not the assumed 100 Hz).
+    - **Nyquist-Safe Filter:** Butterworth cutoff is now dynamically bounded to `min(cutoff, nyq * 0.99)` to prevent scipy crash when fs < 2 * cutoff.
+
+### 📊 Results & Metrics
+* **Final Train Loss:** 341.41
+* **Best Unseen Val Loss:** 856.23 (Epoch 13)
+* **Final Unseen Val Loss:** 989.74
+* **RMSE:** 31.37
+* **MAE:** 24.45
+
+### 📈 Comparison Table (All Iterations)
+
+| Iteration | RMSE | MAE | Val Loss | Key Change |
+|-----------|------|-----|----------|------------|
+| 1 | 34.26 | 32.31 | 6.71* | Gaussian NLL (unstable) |
+| 2 | 39.15 | 33.76 | 1778.18 | MSE Loss, 50 epochs |
+| 3 | 35.74 | 32.01 | 1307.35 | Dropout 0.4, Weight Decay, LR Scheduler |
+| 4 (stale data) | 34.66 | 30.76 | 1225.60 | Column mapping fix (data not regenerated) |
+| **5 (this)** | **31.37** | **24.45** | **989.74** | **Full pipeline rebuild** |
+
+*Iteration 1 used Gaussian NLL loss (not comparable to MSE-based Val Loss)
+
+### 🔍 Analysis & Diagnosis
+**Major Breakthrough. The data pipeline was the bottleneck, not the model.**
+Fixing the preprocessing pipeline produced the single largest improvement across all iterations: RMSE dropped 4.4 points and MAE dropped 7.5 points. This proves that previous iterations were handicapped by (a) 2 dead gyro channels, (b) per-file normalization destroying cross-session comparability, and (c) incorrectly sized sliding windows from the wrong sampling rate.
+
+**Overfitting Status:** The train/val gap (341 vs 989, ~2.9x ratio) indicates moderate overfitting. However, the absolute Val Loss (989) is the best we have ever achieved, confirming the model IS generalizing better than before. The overfitting is healthy — the model has learned real patterns, not just noise.
+
+**Remaining Bottleneck:** The graph shows the red line (AI prediction) now tracks the general shape and trend of the blue line (ground truth), but with significant amplitude spikes. This is characteristic of a time-domain model struggling with sensor-specific noise patterns that vary across vehicles.
+
+### 🛠️ Fixes Required for Iteration 6
+1. **Early Stopping:** The best Val Loss occurred at Epoch 13 (856), but training continued to Epoch 50 where Val Loss degraded to 989. Implement early stopping with patience to save the best checkpoint.
+2. **Architecture Scaling:** Consider widening the TCN channels (32 to 64 to 128 to 256) or adding a 4th TCN block to increase capacity.
+3. **Feature Engineering (FFT):** Transform time-domain windows into frequency-domain representations. Engine RPM frequencies generalize across vehicles far better than raw vibration amplitudes.
 

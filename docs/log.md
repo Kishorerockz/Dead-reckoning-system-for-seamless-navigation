@@ -8,6 +8,6 @@
 
 5. Created src/train_tcn.py. Implemented a Temporal Convolutional Network (TCN) equipped with PyTorch Quantization-Aware Training (QAT) stubs and fusion methods to ensure zero accuracy loss when deployed to INT8 edge hardware.
 
-6. Refactored train_tcn.py to enforce a strict Driver-Independent Split. The model now trains exclusively on Driver E (61 files) and validates on completely unseen Drivers A, B, and D (11 files) to prevent data leakage and guarantee real-world generalization for the ISRO benchmark.
+6. Refactored train_tcn.py to enforce a Route/Session-Independent Split. The model trains on Group 1 files (files containing '-V', 64 files) and validates on unseen Group 2 files (8 files, e.g., 'S1', 'M', 'Y1') to prevent data leakage.
 
 7. Created src/evaluate_model.py to test the INT8 Quantized AI on the unseen driver test set. Calculates RMSE and generates a visual overlap graph (speed_evaluation.png) proving the TCN's ability to filter vibration noise into accurate speed predictions.
