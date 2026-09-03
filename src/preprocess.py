@@ -128,7 +128,11 @@ def create_windows(features, labels, window_size, stride):
 
 if __name__ == "__main__":
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    data_dir = os.path.join(base_dir, 'data', 'IO-VNBD', 'Synchronised V abd S datasets', 'Categorised IOVNB Dataset')
+    candidate_paths = [
+        os.path.join(base_dir, 'IO-VNBD', 'Synchronised V abd S datasets', 'Categorised IOVNB Dataset'),
+        os.path.join(base_dir, 'data', 'IO-VNBD', 'Synchronised V abd S datasets', 'Categorised IOVNB Dataset')
+    ]
+    data_dir = next((p for p in candidate_paths if os.path.exists(p)), candidate_paths[0])
     output_dir = os.path.join(base_dir, 'results', 'processed_data')
     os.makedirs(output_dir, exist_ok=True)
     
@@ -136,7 +140,7 @@ if __name__ == "__main__":
     s_files = glob.glob(search_pattern, recursive=True)
     
     if not s_files:
-        print(f"No S-*.csv files found in {data_dir}. Please check the path.")
+        print(f"No S-*.csv files found in candidate paths:\n  " + "\n  ".join(candidate_paths) + "\nPlease check the path.")
         exit(0)
         
     print(f"Found {len(s_files)} smartphone datasets. Beginning Pass 1 (Global Normalization)...")
