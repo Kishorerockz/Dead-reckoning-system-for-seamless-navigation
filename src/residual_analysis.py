@@ -75,91 +75,98 @@ def main():
     # CALCULATE RESIDUALS: y_true - y_pred
     residuals = truths - predictions
 
-    # 4. Generate the 4-Panel Residual Analysis Dashboard
-    print("Generating 4-panel residual plots...")
-    fig, axes = plt.subplots(2, 2, figsize=(20, 14))
-    fig.suptitle('Iteration 6 TCN Model: Comprehensive Residual Analysis', fontsize=18, fontweight='bold', y=0.96)
+    # 4. Generate Individual Plots
+    plots_dir = os.path.join(base_dir, 'results', 'residual_plots')
+    os.makedirs(plots_dir, exist_ok=True)
+    print(f"Generating individual residual plots in: {plots_dir}")
 
     # --- PLOT 1: Residual Distribution (Hist + KDE) ---
-    ax1 = axes[0, 0]
-    ax1.hist(residuals, bins=60, density=True, alpha=0.6, color='steelblue', edgecolor='black', label='Histogram')
+    plt.figure(figsize=(10, 7))
+    plt.hist(residuals, bins=60, density=True, alpha=0.6, color='steelblue', edgecolor='black', label='Histogram')
     kde = gaussian_kde(residuals)
     x_vals = np.linspace(min(residuals), max(residuals), 1000)
-    ax1.plot(x_vals, kde(x_vals), color='crimson', lw=2.5, label='KDE')
-    ax1.axvline(0, color='black', linestyle='--', lw=2, label='Zero Error')
-    ax1.axvline(np.mean(residuals), color='limegreen', linestyle='-', lw=2, label=f'Mean ({np.mean(residuals):.2f})')
-    ax1.set_title('1. Residual Distribution Plot', fontsize=14)
-    ax1.set_xlabel('Residual Error (True - Predicted)', fontsize=12)
-    ax1.set_ylabel('Density', fontsize=12)
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
+    plt.plot(x_vals, kde(x_vals), color='crimson', lw=2.5, label='KDE')
+    plt.axvline(0, color='black', linestyle='--', lw=2, label='Zero Error')
+    plt.axvline(np.mean(residuals), color='limegreen', linestyle='-', lw=2, label=f'Mean ({np.mean(residuals):.2f})')
+    plt.title('Iteration 6: Residual Distribution', fontsize=16)
+    plt.xlabel('Residual Error (True - Predicted)', fontsize=14)
+    plt.ylabel('Density', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, '1_residual_distribution.png'), dpi=300)
+    plt.close()
 
     # --- PLOT 2: Autocorrelation (ACF) ---
-    ax2 = axes[0, 1]
+    plt.figure(figsize=(10, 7))
     lags = 60
     acf_vals = calculate_acf(residuals, max_lag=lags)
-    ax2.bar(range(len(acf_vals)), acf_vals, width=0.4, color='darkorange')
-    ax2.axhline(0, color='black', lw=1)
+    plt.bar(range(len(acf_vals)), acf_vals, width=0.4, color='darkorange')
+    plt.axhline(0, color='black', lw=1)
     
     # 95% confidence interval (~ 1.96 / sqrt(N))
     conf_int = 1.96 / np.sqrt(len(residuals))
-    ax2.axhline(conf_int, color='red', linestyle='--', alpha=0.6, label='95% Confidence Interval')
-    ax2.axhline(-conf_int, color='red', linestyle='--', alpha=0.6)
+    plt.axhline(conf_int, color='red', linestyle='--', alpha=0.6, label='95% Confidence Interval')
+    plt.axhline(-conf_int, color='red', linestyle='--', alpha=0.6)
     
-    ax2.set_title('2. Autocorrelation of Residuals (ACF)', fontsize=14)
-    ax2.set_xlabel('Lag (Time Steps)', fontsize=12)
-    ax2.set_ylabel('Autocorrelation', fontsize=12)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    plt.title('Iteration 6: Autocorrelation of Residuals (ACF)', fontsize=16)
+    plt.xlabel('Lag (Time Steps)', fontsize=14)
+    plt.ylabel('Autocorrelation', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, '2_residual_acf.png'), dpi=300)
+    plt.close()
 
     # --- PLOT 3: Residuals vs. Fitted Plot ---
-    ax3 = axes[1, 0]
-    ax3.scatter(predictions, residuals, alpha=0.3, color='purple', s=8)
-    ax3.axhline(0, color='black', linestyle='--', lw=2)
+    plt.figure(figsize=(10, 7))
+    plt.scatter(predictions, residuals, alpha=0.3, color='purple', s=8)
+    plt.axhline(0, color='black', linestyle='--', lw=2)
     
-    # Fit a lowess/poly trendline to easily spot heteroscedasticity or curve bias
+    # Fit a lowess/poly trendline
     z = np.polyfit(predictions, residuals, 2)
     p = np.poly1d(z)
     x_trend = np.linspace(min(predictions), max(predictions), 100)
-    ax3.plot(x_trend, p(x_trend), color='crimson', lw=2.5, label='Trend (2nd deg poly)')
+    plt.plot(x_trend, p(x_trend), color='crimson', lw=2.5, label='Trend (2nd deg poly)')
     
-    ax3.set_title('3. Residuals vs. Fitted Plot', fontsize=14)
-    ax3.set_xlabel('Fitted Values (Predicted Speed km/h)', fontsize=12)
-    ax3.set_ylabel('Residuals (True - Predicted)', fontsize=12)
-    ax3.legend()
-    ax3.grid(True, alpha=0.3)
+    plt.title('Iteration 6: Residuals vs. Fitted', fontsize=16)
+    plt.xlabel('Fitted Values (Predicted Speed km/h)', fontsize=14)
+    plt.ylabel('Residuals (True - Predicted)', fontsize=14)
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, '3_residuals_vs_fitted.png'), dpi=300)
+    plt.close()
 
     # --- PLOT 4: Time-Series Error Overlay ---
-    ax4 = axes[1, 1]
-    # Plot a 500-step snippet for visual clarity
+    fig, ax1 = plt.subplots(figsize=(12, 6))
     snippet_len = min(500, len(truths))
     t_steps = np.arange(snippet_len)
     
-    ax4.plot(t_steps, truths[:snippet_len], label='True Speed', color='blue', lw=2)
-    ax4.plot(t_steps, predictions[:snippet_len], label='Predicted Speed', color='orange', lw=2, alpha=0.8)
-    ax4.set_xlabel('Time Step (Sliding Windows)', fontsize=12)
-    ax4.set_ylabel('Speed (km/h)', fontsize=12)
+    ax1.plot(t_steps, truths[:snippet_len], label='True Speed', color='blue', lw=2)
+    ax1.plot(t_steps, predictions[:snippet_len], label='Predicted Speed', color='orange', lw=2, alpha=0.8)
+    ax1.set_xlabel('Time Step (Sliding Windows)', fontsize=14)
+    ax1.set_ylabel('Speed (km/h)', fontsize=14)
     
     # Overlay residuals on a secondary Y-axis
-    ax4_twin = ax4.twinx()
-    ax4_twin.bar(t_steps, residuals[:snippet_len], alpha=0.25, color='red', label='Residual Error Magnitude')
-    ax4_twin.set_ylabel('Residual Magnitude', color='red', fontsize=12)
-    ax4_twin.tick_params(axis='y', labelcolor='red')
+    ax2 = ax1.twinx()
+    ax2.bar(t_steps, residuals[:snippet_len], alpha=0.25, color='red', label='Residual Error Magnitude')
+    ax2.set_ylabel('Residual Magnitude', color='red', fontsize=14)
+    ax2.tick_params(axis='y', labelcolor='red')
     
-    ax4.set_title(f'4. Time-Series Error Overlay (First {snippet_len} Steps)', fontsize=14)
+    plt.title(f'Iteration 6: Time-Series Error Overlay (First {snippet_len} Steps)', fontsize=16)
     
     # Combine legends from both axes
-    lines, labels = ax4.get_legend_handles_labels()
-    lines2, labels2 = ax4_twin.get_legend_handles_labels()
-    ax4.legend(lines + lines2, labels + labels2, loc='upper left')
+    lines, labels = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines + lines2, labels + labels2, loc='upper left')
     
-    ax4.grid(True, alpha=0.3)
+    ax1.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(plots_dir, '4_time_series_overlay.png'), dpi=300)
+    plt.close()
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    
-    plot_path = os.path.join(base_dir, 'results', 'residual_analysis.png')
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-    print(f"\n✅ Residual Analysis Dashboard successfully saved to: {plot_path}")
+    print("✅ All 4 individual plots saved successfully!")
 
 if __name__ == "__main__":
     main()
