@@ -27,7 +27,7 @@ class VehicleMarker(private val mapView: MapView) : Marker(mapView) {
         // State colors matching the HUD status pill
         val COLOR_GNSS_ACTIVE: Int = Color.parseColor("#4FD8E8")   // High-confidence GPS fused
         val COLOR_TRANSITIONING: Int = Color.parseColor("#F5A623") // Transitional handoff
-        val COLOR_INS_ONLY: Int = Color.parseColor("#8E6CFF")      // Pure INS dead reckoning
+        val COLOR_INS_ONLY: Int = Color.parseColor("#7C5CFF")      // Pure INS dead reckoning (Violet)
 
         private const val COLOR_ANIMATION_DURATION_MS = 400L
     }

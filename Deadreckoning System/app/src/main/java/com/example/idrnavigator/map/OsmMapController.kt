@@ -115,12 +115,32 @@ fun OsmMapController(
 
     var hasInitialCentered by remember { mutableStateOf(false) }
     var lastHistorySize by remember { mutableIntStateOf(0) }
+    var lastClassicalSize by remember { mutableIntStateOf(0) }
+    var lastGpsSize by remember { mutableIntStateOf(0) }
 
     val polyline = remember {
         Polyline().apply {
-            outlinePaint.color = Color.parseColor("#4FD8E8") // VehicleMarkerAccent cyan
+            outlinePaint.color = Color.parseColor("#4FD8E8") // AI path — cyan
             outlinePaint.strokeWidth = 8f
             outlinePaint.isAntiAlias = true
+        }
+    }
+
+    val classicalPolyline = remember {
+        Polyline().apply {
+            outlinePaint.color = Color.parseColor("#FF8C42") // Classical path — orange
+            outlinePaint.strokeWidth = 6f
+            outlinePaint.isAntiAlias = true
+            outlinePaint.alpha = 180
+        }
+    }
+
+    val gpsPolyline = remember {
+        Polyline().apply {
+            outlinePaint.color = Color.parseColor("#4CAF50") // GPS ground truth — green
+            outlinePaint.strokeWidth = 5f
+            outlinePaint.isAntiAlias = true
+            outlinePaint.alpha = 160
         }
     }
 
@@ -146,6 +166,8 @@ fun OsmMapController(
                 overlayManager.tilesOverlay.setColorFilter(null)
             }
 
+            overlays.add(gpsPolyline)
+            overlays.add(classicalPolyline)
             overlays.add(polyline)
         }
     }
@@ -179,7 +201,10 @@ fun OsmMapController(
             }
             false
         }
-        onDispose { }
+        onDispose {
+            mapView.onPause()
+            mapView.onDetach()
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -210,18 +235,41 @@ fun OsmMapController(
                     map.controller.setZoom(17.5)
                     hasInitialCentered = true
                 } else if (followVehicle) {
-                    // Update center directly without thrashing animation queues
                     map.controller.setCenter(currentPoint)
                 }
 
+                // Course-Up mode: rotate map so heading is "up"
+                // North-Up mode: map stays fixed at 0 degrees
+                val targetOrientation = if (uiState.isCourseUpMode) {
+                    -uiState.headingDeg.toFloat()
+                } else {
+                    0f
+                }
+                map.mapOrientation = targetOrientation
+
                 // Update vehicle marker directly
-                vehicleMarker.updatePositionAndHeading(currentPoint, uiState.headingDeg.toFloat())
+                vehicleMarker.updatePositionAndHeading(
+                    currentPoint,
+                    if (uiState.isCourseUpMode) 0f else uiState.headingDeg.toFloat()
+                )
                 vehicleMarker.updateState(uiState.gnssState)
 
-                // Update track only when list size changes to avoid redundant CPU work
+                // Update AI track (primary cyan polyline)
                 if (uiState.locationHistory.size != lastHistorySize) {
                     polyline.setPoints(uiState.locationHistory)
                     lastHistorySize = uiState.locationHistory.size
+                }
+
+                // Update Classical track (orange polyline)
+                if (uiState.classicalPathHistory.size != lastClassicalSize) {
+                    classicalPolyline.setPoints(uiState.classicalPathHistory)
+                    lastClassicalSize = uiState.classicalPathHistory.size
+                }
+
+                // Update GPS ground truth track (green polyline)
+                if (uiState.gpsPathHistory.size != lastGpsSize) {
+                    gpsPolyline.setPoints(uiState.gpsPathHistory)
+                    lastGpsSize = uiState.gpsPathHistory.size
                 }
 
                 map.invalidate()

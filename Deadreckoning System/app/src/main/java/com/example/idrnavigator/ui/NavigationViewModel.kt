@@ -13,10 +13,16 @@ import com.example.idrnavigator.sensors.GnssManager
 import com.example.idrnavigator.sensors.GpsData
 import com.example.idrnavigator.sensors.ImuData
 import com.example.idrnavigator.sensors.ImuSensorManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.sample
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import org.osmdroid.util.GeoPoint
 import kotlin.math.atan2
@@ -47,7 +53,16 @@ data class NavigationUiState(
     val rawAiVelocityKmH: Float = 0f,
     // Raw or aligned vectors for engineering display
     val imuData: ImuData = ImuData(),
-    val gpsData: GpsData = GpsData()
+    val gpsData: GpsData = GpsData(),
+    // GPS simulation toggle
+    val isGpsSimulationActive: Boolean = false,
+    // Dual-path comparison tracks
+    val classicalPathHistory: List<GeoPoint> = emptyList(),
+    val gpsPathHistory: List<GeoPoint> = emptyList(),
+    // Map orientation mode
+    val isCourseUpMode: Boolean = false,
+    // Phone mount slip detection
+    val isMountSlipped: Boolean = false
 )
 
 class NavigationViewModel(
@@ -61,36 +76,89 @@ class NavigationViewModel(
     private val gnssDeficitHandler = GnssDeficitHandler(aiEstimator = aiEstimator)
     private val _locationHistory = MutableStateFlow<List<GeoPoint>>(emptyList())
 
-    val alignedImuFlow = imuSensorManager.imuDataFlow
-        .combine(gnssManager.gpsDataFlow) { imu, gps ->
-            alignmentEngine.processAndAlign(imu, gps)
-        }
+    // Dual-path tracking for side-by-side comparison
+    private val _classicalPathHistory = MutableStateFlow<List<GeoPoint>>(emptyList())
+    private val _gpsPathHistory = MutableStateFlow<List<GeoPoint>>(emptyList())
 
-    val uiState = alignedImuFlow
-        .combine(gnssManager.gpsDataFlow) { alignedImu, gps ->
+    // GPS outage simulation
+    private val _isGpsSimulationActive = MutableStateFlow(false)
+
+    companion object {
+        const val MAX_POLYLINE_POINTS = 3000
+        const val MIN_POINT_DISTANCE_METERS = 2.0
+        const val UI_THROTTLE_SAMPLE_MS = 50L // ~20Hz update rate for smooth Compose rendering
+    }
+
+    // Map orientation mode
+    private val _isCourseUpMode = MutableStateFlow(false)
+
+    val alignedImuFlow = imuSensorManager.imuDataFlow
+        .map { imu ->
+            alignmentEngine.processAndAlign(imu, gnssManager.gpsDataFlow.value)
+        }
+        .flowOn(Dispatchers.Default)
+
+    private val throttledUiStateFlow = alignedImuFlow
+        .map { alignedImu ->
+            val gps = gnssManager.gpsDataFlow.value
             val mx = alignedImu.magX.toDouble()
             val my = alignedImu.magY.toDouble()
             val rawDeg = Math.toDegrees(atan2(mx, my))
             val magHeading = ((rawDeg + 360) % 360).toFloat()
-            
-            gnssDeficitHandler.update(gps, alignedImu, magHeading)
-            gnssDeficitHandler.fusedPosition.value to alignedImu
+
+            // If GPS simulation is active, mask GPS as lost
+            val effectiveGps = if (_isGpsSimulationActive.value) {
+                gps.copy(hasFix = false, accuracy = 999f, satelliteCount = 0)
+            } else {
+                gps
+            }
+
+            // Track real GPS path separately for ground truth comparison
+            if (gps.hasFix && gps.lat != 0.0 && gps.lon != 0.0) {
+                val pt = GeoPoint(gps.lat, gps.lon)
+                val gpsHist = _gpsPathHistory.value.toMutableList()
+                val lastGps = gpsHist.lastOrNull()
+                if (lastGps == null || lastGps.distanceToAsDouble(pt) > MIN_POINT_DISTANCE_METERS) {
+                    gpsHist.add(pt)
+                    if (gpsHist.size > MAX_POLYLINE_POINTS) gpsHist.removeAt(0)
+                    _gpsPathHistory.value = gpsHist
+                }
+            }
+
+            gnssDeficitHandler.update(effectiveGps, alignedImu, magHeading)
+            alignedImu
         }
-        .combine(_locationHistory) { (fused, alignedImu), history ->
-            buildUiState(fused, alignedImu, history)
+        .sample(UI_THROTTLE_SAMPLE_MS)
+        .map { alignedImu ->
+            buildUiState(
+                fused = gnssDeficitHandler.fusedPosition.value,
+                imu = alignedImu,
+                history = _locationHistory.value
+            )
         }
+        .flowOn(Dispatchers.Default)
+
+    @OptIn(FlowPreview::class)
+    val uiState: StateFlow<NavigationUiState> = throttledUiStateFlow
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5000),
+            initialValue = NavigationUiState()
+        )
 
     init {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.Default) {
             gnssDeficitHandler.fusedPosition.collect { fused ->
-                if (fused.hasFix || fused.state == GnssState.INS_ONLY) {
+                if ((fused.hasFix || fused.state == GnssState.INS_ONLY) &&
+                    fused.lat != 0.0 && fused.lon != 0.0
+                ) {
                     val newPoint = GeoPoint(fused.lat, fused.lon)
                     val history = _locationHistory.value.toMutableList()
                     val last = history.lastOrNull()
-                    // Only add if moved more than 1 meter to reduce list noise
-                    if (last == null || last.distanceToAsDouble(newPoint) > 1.0) {
+                    // Only add if moved more than MIN_POINT_DISTANCE_METERS to eliminate noise and save memory
+                    if (last == null || last.distanceToAsDouble(newPoint) > MIN_POINT_DISTANCE_METERS) {
                         history.add(newPoint)
-                        if (history.size > 1000) history.removeAt(0)
+                        if (history.size > MAX_POLYLINE_POINTS) history.removeAt(0)
                         _locationHistory.value = history
                     }
                 }
@@ -112,6 +180,14 @@ class NavigationViewModel(
 
     fun setDeadReckoningMode(mode: DeadReckoningMode) {
         gnssDeficitHandler.deadReckoningMode = mode
+    }
+
+    fun toggleGpsSimulation() {
+        _isGpsSimulationActive.value = !_isGpsSimulationActive.value
+    }
+
+    fun toggleCourseUpMode() {
+        _isCourseUpMode.value = !_isCourseUpMode.value
     }
 
     private fun buildUiState(fused: FusedPosition, imu: ImuData, history: List<GeoPoint>): NavigationUiState {
@@ -161,7 +237,17 @@ class NavigationViewModel(
                 hasFix = fused.hasFix,
                 hasBearing = true,
                 satelliteCount = fused.satelliteCount
-            )
+            ),
+            isGpsSimulationActive = _isGpsSimulationActive.value,
+            classicalPathHistory = _classicalPathHistory.value,
+            gpsPathHistory = _gpsPathHistory.value,
+            isCourseUpMode = _isCourseUpMode.value,
+            isMountSlipped = alignmentEngine.isMountSlipped
         )
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        aiEstimator.onnxRunner.close()
     }
 }

@@ -11,11 +11,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -30,8 +33,11 @@ import java.util.Date
 import java.util.Locale
 
 import android.widget.Toast
+import androidx.compose.material.icons.filled.Explore
+import androidx.compose.material.icons.filled.GpsOff
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.ui.platform.LocalContext
 import com.example.idrnavigator.map.AppMapStyle
 import com.example.idrnavigator.map.OsmMapController
@@ -47,10 +53,34 @@ fun NavigationHudScreen(
     var mapStyle by remember { mutableStateOf(AppMapStyle.DARK_COCKPIT) }
     var followVehicle by remember { mutableStateOf(true) }
 
+    // Mode-duration counter: tracks how long current GNSS state has been active
+    var lastTrackedState by remember { mutableStateOf(state.gnssState) }
+    var stateStartTimeMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var currentClockMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
+
+    LaunchedEffect(state.gnssState) {
+        if (state.gnssState != lastTrackedState) {
+            lastTrackedState = state.gnssState
+            stateStartTimeMs = System.currentTimeMillis()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            delay(500)
+            currentClockMs = System.currentTimeMillis()
+        }
+    }
+
+    val stateElapsedSec = ((currentClockMs - stateStartTimeMs) / 1000L).coerceAtLeast(0L)
+    val stateMinutes = stateElapsedSec / 60
+    val stateSeconds = stateElapsedSec % 60
+    val modeDurationStr = String.format(Locale.US, "%s: %02d:%02d", state.gnssState.name, stateMinutes, stateSeconds)
+
     val targetPillColor = when (state.gnssState) {
         GnssState.GNSS_ACTIVE   -> GnssActive       // #4FD8E8 Cyan
         GnssState.TRANSITIONING -> GnssDegraded     // #F5A623 Amber
-        GnssState.INS_ONLY      -> InsDeadReckoning // #8E6CFF Electric Violet
+        GnssState.INS_ONLY      -> InsDeadReckoning // #7C5CFF Violet
     }
 
     val animatedPillColor by animateColorAsState(
@@ -103,8 +133,8 @@ fun NavigationHudScreen(
             )
             Spacer(modifier = Modifier.width(16.dp))
             Text(
-                text = "SAT ${state.satelliteCount}",
-                color = CockpitSecondaryText,
+                text = "🛰 ${state.satelliteCount} Sats",
+                color = if (state.satelliteCount > 0) CockpitPrimaryText else CockpitSecondaryText,
                 style = MaterialTheme.typography.labelMedium
             )
             Spacer(modifier = Modifier.width(16.dp))
@@ -113,6 +143,47 @@ fun NavigationHudScreen(
                 color = CockpitSecondaryText,
                 style = MaterialTheme.typography.labelMedium
             )
+        }
+
+        // Mount Slip Warning Banner
+        if (state.isMountSlipped) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 56.dp)
+                    .fillMaxWidth(0.85f),
+                shape = RoundedCornerShape(12.dp),
+                color = GnssDegraded.copy(alpha = 0.9f),
+                tonalElevation = 4.dp
+            ) {
+                Text(
+                    text = "⚠ Phone mount slipped — recalibrating...",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
+        }
+
+        // GPS Simulation Active Banner
+        if (state.isGpsSimulationActive) {
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = if (state.isMountSlipped) 96.dp else 56.dp)
+                    .fillMaxWidth(0.85f),
+                shape = RoundedCornerShape(12.dp),
+                color = InsDeadReckoning.copy(alpha = 0.9f),
+                tonalElevation = 4.dp
+            ) {
+                Text(
+                    text = "🛰 GPS OUTAGE SIMULATION ACTIVE",
+                    color = Color.White,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                )
+            }
         }
 
         // Dead Reckoning Model Toggle Chip (AI TinyTCN vs Classical)
@@ -210,18 +281,36 @@ fun NavigationHudScreen(
                 Icon(Icons.Default.Refresh, contentDescription = "Recalibrate")
             }
 
-            // Quick Log Button
+            // GPS Outage Simulation Toggle
             FloatingActionButton(
-                onClick = { /* Quick Log */ },
-                containerColor = CockpitSurface,
-                contentColor = Color.Red,
+                onClick = {
+                    viewModel.toggleGpsSimulation()
+                    val msg = if (!state.isGpsSimulationActive) "GPS Outage Simulation ON" else "GPS Outage Simulation OFF"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                },
+                containerColor = if (state.isGpsSimulationActive) InsDeadReckoning.copy(alpha = 0.8f) else CockpitSurface,
+                contentColor = if (state.isGpsSimulationActive) Color.White else CockpitSecondaryText,
                 modifier = Modifier.size(48.dp),
                 shape = CircleShape
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(16.dp)
-                        .background(Color.Red, CircleShape)
+                Icon(Icons.Default.GpsOff, contentDescription = "Simulate GPS Outage")
+            }
+
+            // Course-Up / North-Up Toggle
+            FloatingActionButton(
+                onClick = {
+                    viewModel.toggleCourseUpMode()
+                    val msg = if (!state.isCourseUpMode) "Course-Up Mode" else "North-Up Mode"
+                    Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                },
+                containerColor = CockpitSurface,
+                contentColor = if (state.isCourseUpMode) VehicleMarkerAccent else CockpitSecondaryText,
+                modifier = Modifier.size(48.dp),
+                shape = CircleShape
+            ) {
+                Icon(
+                    if (state.isCourseUpMode) Icons.Default.Navigation else Icons.Default.Explore,
+                    contentDescription = "Toggle Map Orientation"
                 )
             }
         }
@@ -260,7 +349,8 @@ fun NavigationHudScreen(
                     "⚠ Drift Est." else "Drift Est.",
                 value = if (state.hasFix || state.gnssStatus == GnssStatus.INS_ONLY) "%.1f".format(state.driftEstMeters) else "—",
                 unit = "m",
-                valueColor = driftColor
+                valueColor = driftColor,
+                subText = modeDurationStr
             )
             Box(
                 modifier = Modifier
@@ -282,7 +372,8 @@ fun InstrumentDataBlock(
     label: String,
     value: String,
     unit: String,
-    valueColor: Color = CockpitPrimaryText
+    valueColor: Color = CockpitPrimaryText,
+    subText: String? = null
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(
@@ -302,6 +393,13 @@ fun InstrumentDataBlock(
                 color = CockpitSecondaryText,
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.padding(bottom = 6.dp)
+            )
+        }
+        if (subText != null) {
+            Text(
+                text = subText,
+                color = valueColor.copy(alpha = 0.85f),
+                style = MaterialTheme.typography.labelSmall
             )
         }
     }

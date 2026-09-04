@@ -111,9 +111,9 @@ class CoreGnssDeficitHandler(
 
         when (currentState) {
             IdrGnssState.GNSS_ACTIVE -> {
-                val timeSinceGoodGps = currentTime - lastGoodGpsTime
-                if (!isGpsGood && timeSinceGoodGps > GPS_LOSS_TIMEOUT_MS) {
-                    val handoffPos = lastGoodLatLon ?: IdrLatLon(gpsData.lat, gpsData.lon)
+                val timeSinceGoodGps = if (lastGoodGpsTime > 0L) currentTime - lastGoodGpsTime else 0L
+                if (lastGoodLatLon != null && !isGpsGood && timeSinceGoodGps > GPS_LOSS_TIMEOUT_MS) {
+                    val handoffPos = lastGoodLatLon!!
                     logger.d(
                         TAG,
                         "▼ GNSS_ACTIVE → INS_ONLY | " +

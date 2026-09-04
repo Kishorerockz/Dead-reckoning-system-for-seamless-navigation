@@ -80,7 +80,8 @@ class OnnxVelocityRunner(private val context: Context) : AutoCloseable {
             copyAssetIfNeeded(MODEL_DATA_NAME, dataFile)
 
             val sessionOptions = OrtSession.SessionOptions().apply {
-                setIntraOpNumThreads(2)
+                setIntraOpNumThreads(1)
+                setInterOpNumThreads(1)
                 setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
             }
 
@@ -92,6 +93,9 @@ class OnnxVelocityRunner(private val context: Context) : AutoCloseable {
             isModelLoaded = false
         }
     }
+
+    private val tensorShape = longArrayOf(1L, NUM_CHANNELS.toLong(), WINDOW_LENGTH.toLong())
+    private val inputBuffer = FloatBuffer.allocate(NUM_CHANNELS * WINDOW_LENGTH)
 
     private fun copyAssetIfNeeded(assetName: String, destinationFile: File) {
         val assetFd = try { context.assets.openFd(assetName) } catch (_: Exception) { null }
@@ -120,8 +124,9 @@ class OnnxVelocityRunner(private val context: Context) : AutoCloseable {
         }
 
         val startTime = System.nanoTime()
-        val tensorShape = longArrayOf(1L, NUM_CHANNELS.toLong(), WINDOW_LENGTH.toLong())
-        val inputBuffer = FloatBuffer.wrap(normalizedFlatTensor)
+        inputBuffer.clear()
+        inputBuffer.put(normalizedFlatTensor)
+        inputBuffer.flip()
 
         return try {
             val inputTensor = OnnxTensor.createTensor(env, inputBuffer, tensorShape)

@@ -35,6 +35,7 @@ class AiPositionEstimator(
 
     private val inputBuilder = ModelInputBuilder(windowLength = 10, targetSampleIntervalMs = 100L)
     private val classicalFallback = ClassicalDeadReckoner()
+    val ekf = com.example.idr.core.estimator.ErrorStateEkf()
 
     private var smoothedVelocityMps = 0f
     var rawPredictedKmH = 0f
@@ -49,38 +50,53 @@ class AiPositionEstimator(
     override fun estimateVelocity(imuWindow: List<ImuData>): Float {
         if (imuWindow.isEmpty()) return smoothedVelocityMps
 
-        // 1. Check 3D Zero-Velocity Update (ZUPT)
-        // If vehicle is physically stopped (e.g. red light / parked), clamp velocity to 0
-        val isStationary = checkStationary(imuWindow)
-        if (isStationary) {
-            smoothedVelocityMps = 0f
-            rawPredictedKmH = 0f
-            return 0f
-        }
-
-        // 2. Feed IMU window samples into the model rolling buffer
-        for (sample in imuWindow) {
-            inputBuilder.addSample(sample)
-        }
-
-        // 3. Run ONNX model if ready and loaded
-        if (onnxRunner.isModelLoaded && inputBuilder.isReady()) {
-            val flatTensor = inputBuilder.buildNormalizedFlatTensor(onnxRunner.mean, onnxRunner.scale)
-            if (flatTensor != null) {
-                rawPredictedKmH = onnxRunner.predictVelocityKmH(flatTensor)
-                val rawVelocityMps = rawPredictedKmH / 3.6f
-
-                // 4. Apply EMA smoothing
-                smoothedVelocityMps = if (smoothedVelocityMps == 0f) {
-                    rawVelocityMps
-                } else {
-                    (VELOCITY_EMA_ALPHA * rawVelocityMps) + ((1f - VELOCITY_EMA_ALPHA) * smoothedVelocityMps)
-                }
-                return smoothedVelocityMps
+        try {
+            // 1. Check 3D Zero-Velocity Update (ZUPT)
+            val isStationary = checkStationary(imuWindow)
+            if (isStationary) {
+                ekf.updateZupt()
+                smoothedVelocityMps = 0f
+                rawPredictedKmH = 0f
+                return 0f
             }
+
+            // 2. Feed IMU window samples into the model rolling buffer
+            for (sample in imuWindow) {
+                inputBuilder.addSample(sample)
+            }
+
+            // 3. Run ONNX model if ready and loaded
+            if (onnxRunner.isModelLoaded && inputBuilder.isReady()) {
+                val flatTensor = inputBuilder.buildNormalizedFlatTensor(onnxRunner.mean, onnxRunner.scale)
+                if (flatTensor != null) {
+                    rawPredictedKmH = onnxRunner.predictVelocityKmH(flatTensor)
+                    val rawVelocityMps = rawPredictedKmH / 3.6f
+
+                    // Check for NaN / Inf
+                    val safeVelocityMps = if (rawVelocityMps.isNaN() || rawVelocityMps.isInfinite()) {
+                        Log.w(TAG, "ONNX raw velocity returned NaN/Inf, falling back to 0")
+                        0f
+                    } else rawVelocityMps
+
+                    // 4. Update EKF with body acceleration, NHC, and TCN velocity aiding
+                    val latest = imuWindow.last()
+                    val dt = if (imuWindow.size > 1) {
+                        (imuWindow.last().timestamp - imuWindow.first().timestamp).coerceAtLeast(10L) / 1000f
+                    } else 0.05f
+
+                    ekf.predict(axBody = latest.accelY, ayBody = latest.accelX, gzBody = latest.gyroZ, dt = dt)
+                    ekf.updateVelocity(safeVelocityMps, variance = com.example.idr.core.estimator.ErrorStateEkf.DEFAULT_R_VEL)
+                    ekf.updateNhc()
+
+                    smoothedVelocityMps = ekf.forwardVelocityMps
+                    return smoothedVelocityMps
+                }
+            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "Error in AI velocity/EKF estimation cycle, falling back to classical", t)
         }
 
-        // Fallback to classical integration if ONNX is warming up or unavailable
+        // Fallback to classical integration if ONNX is warming up, unavailable, or threw error
         smoothedVelocityMps = classicalFallback.estimateVelocity(imuWindow)
         return smoothedVelocityMps
     }
@@ -113,6 +129,7 @@ class AiPositionEstimator(
 
     fun reset() {
         inputBuilder.reset()
+        ekf.reset()
         smoothedVelocityMps = 0f
         rawPredictedKmH = 0f
     }

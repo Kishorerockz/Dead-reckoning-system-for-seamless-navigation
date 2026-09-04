@@ -61,10 +61,10 @@ class MainActivity : ComponentActivity() {
         val appUserAgent = "${packageName}/1.0 (Android; Mobile)"
         osmConfig.userAgentValue = appUserAgent
         osmConfig.additionalHttpRequestProperties["User-Agent"] = appUserAgent
-        osmConfig.tileDownloadThreads = 4
-        osmConfig.tileFileSystemThreads = 4
-        osmConfig.cacheMapTileCount = 120
-        osmConfig.tileDownloadMaxQueueSize = 60
+        osmConfig.tileDownloadThreads = 2
+        osmConfig.tileFileSystemThreads = 2
+        osmConfig.cacheMapTileCount = 60
+        osmConfig.tileDownloadMaxQueueSize = 30
         osmConfig.expirationExtendedDuration = 1000L * 60 * 60 * 24 * 30 // 30 days cache
 
         imuSensorManager = ImuSensorManager(this)
@@ -72,6 +72,8 @@ class MainActivity : ComponentActivity() {
         csvLogger = CsvLogger(this)
         navigationViewModel = NavigationViewModel(this, imuSensorManager, gnssManager)
         
+        checkBatteryOptimization()
+
         enableEdgeToEdge()
         setContent {
             IDRNavigatorTheme {
@@ -81,6 +83,29 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    private fun checkBatteryOptimization() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(android.content.Context.POWER_SERVICE) as? android.os.PowerManager
+            if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                try {
+                    val intent = android.content.Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = android.net.Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    android.util.Log.w("MainActivity", "Battery optimization prompt skipped or denied", e)
+                }
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (::imuSensorManager.isInitialized) imuSensorManager.stop()
+        if (::gnssManager.isInitialized) gnssManager.stop()
+        if (::csvLogger.isInitialized) csvLogger.stop()
     }
 }
 
