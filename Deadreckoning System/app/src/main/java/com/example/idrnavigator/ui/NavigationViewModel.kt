@@ -9,6 +9,8 @@ import com.example.idrnavigator.fusion.FusedPosition
 import com.example.idrnavigator.fusion.GnssDeficitHandler
 import com.example.idrnavigator.fusion.GnssState
 import com.example.idrnavigator.inference.AiPositionEstimator
+import com.example.idrnavigator.map.RouteManager
+import com.example.idrnavigator.map.RouteState
 import com.example.idrnavigator.sensors.GnssManager
 import com.example.idrnavigator.sensors.GpsData
 import com.example.idrnavigator.sensors.ImuData
@@ -61,8 +63,14 @@ data class NavigationUiState(
     val gpsPathHistory: List<GeoPoint> = emptyList(),
     // Map orientation mode
     val isCourseUpMode: Boolean = false,
-    // Phone mount slip detection
-    val isMountSlipped: Boolean = false
+    val isMountSlipped: Boolean = false,
+    // Sensor bias calibration
+    val isCalibratingSensors: Boolean = false,
+    val isSensorCalibrated: Boolean = false,
+    val sensorCalibrationProgress: Float = 0f,
+    val sensorCalibrationCountdown: Int = 0,
+    val calibrationMovementDetected: Boolean = false,
+    val isAiModelLoaded: Boolean = false
 )
 
 class NavigationViewModel(
@@ -71,9 +79,15 @@ class NavigationViewModel(
     val gnssManager: GnssManager
 ) : ViewModel() {
 
+    val sensorBiasCalibrator = com.example.idrnavigator.calibration.SensorBiasCalibrator(context.applicationContext)
     private val alignmentEngine = AlignmentEngine()
     private val aiEstimator = AiPositionEstimator(context.applicationContext)
     private val gnssDeficitHandler = GnssDeficitHandler(aiEstimator = aiEstimator)
+    private val settings = context.applicationContext.getSharedPreferences("idr_settings", Context.MODE_PRIVATE)
+    private val routeManager = RouteManager(context, viewModelScope)
+    private val _destination = MutableStateFlow<GeoPoint?>(null)
+    val destination: StateFlow<GeoPoint?> = _destination
+    val routeState: StateFlow<RouteState> = routeManager.state
     private val _locationHistory = MutableStateFlow<List<GeoPoint>>(emptyList())
 
     // Dual-path tracking for side-by-side comparison
@@ -92,12 +106,31 @@ class NavigationViewModel(
     // Map orientation mode
     private val _isCourseUpMode = MutableStateFlow(false)
 
-    val alignedImuFlow = imuSensorManager.imuDataFlow
-        .map { imu ->
-            alignmentEngine.processAndAlign(imu, gnssManager.gpsDataFlow.value)
+    init {
+        val savedMode = settings.getString("dead_reckoning_mode", DeadReckoningMode.AI_TCN.name)
+        if (savedMode == DeadReckoningMode.AI_TCN.name && aiEstimator.isModelLoaded) {
+            gnssDeficitHandler.deadReckoningMode = DeadReckoningMode.AI_TCN
+        } else {
+            gnssDeficitHandler.deadReckoningMode = DeadReckoningMode.CLASSICAL
+        }
+        _isCourseUpMode.value = settings.getBoolean("course_up_mode", false)
+        _isGpsSimulationActive.value = settings.getBoolean("gps_simulation", false)
+    }
+
+    private val alignedImuSource = imuSensorManager.imuDataFlow
+        .map { rawImu ->
+            val biasCorrectedImu = sensorBiasCalibrator.processAndApply(rawImu)
+            alignmentEngine.processAndAlign(biasCorrectedImu, gnssManager.gpsDataFlow.value)
         }
         .flowOn(Dispatchers.Default)
 
+    val alignedImuFlow = alignedImuSource.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = ImuData()
+    )
+
+    @OptIn(FlowPreview::class)
     private val throttledUiStateFlow = alignedImuFlow
         .map { alignedImu ->
             val gps = gnssManager.gpsDataFlow.value
@@ -170,24 +203,52 @@ class NavigationViewModel(
         alignmentEngine.reset()
     }
 
+    fun setDestination(destination: GeoPoint) {
+        _destination.value = destination
+        val current = gnssDeficitHandler.fusedPosition.value
+        if (current.lat != 0.0 && current.lon != 0.0) {
+            routeManager.requestRoute(GeoPoint(current.lat, current.lon), destination)
+        } else {
+            routeManager.clear()
+        }
+    }
+
+    fun clearDestination() {
+        _destination.value = null
+        routeManager.clear()
+    }
+
+    fun startSensorCalibration(durationMs: Long = 3500L) {
+        sensorBiasCalibrator.startCalibration(durationMs)
+    }
+
+    fun resetSensorCalibration() {
+        sensorBiasCalibrator.resetCalibration()
+    }
+
     fun toggleDeadReckoningMode() {
-        gnssDeficitHandler.deadReckoningMode = if (gnssDeficitHandler.deadReckoningMode == DeadReckoningMode.AI_TCN) {
+        val nextMode = if (gnssDeficitHandler.deadReckoningMode == DeadReckoningMode.AI_TCN) {
             DeadReckoningMode.CLASSICAL
         } else {
             DeadReckoningMode.AI_TCN
         }
+        setDeadReckoningMode(nextMode)
     }
 
     fun setDeadReckoningMode(mode: DeadReckoningMode) {
+        if (mode == DeadReckoningMode.AI_TCN && !aiEstimator.isModelLoaded) return
         gnssDeficitHandler.deadReckoningMode = mode
+        settings.edit().putString("dead_reckoning_mode", mode.name).apply()
     }
 
     fun toggleGpsSimulation() {
         _isGpsSimulationActive.value = !_isGpsSimulationActive.value
+        settings.edit().putBoolean("gps_simulation", _isGpsSimulationActive.value).apply()
     }
 
     fun toggleCourseUpMode() {
         _isCourseUpMode.value = !_isCourseUpMode.value
+        settings.edit().putBoolean("course_up_mode", _isCourseUpMode.value).apply()
     }
 
     private fun buildUiState(fused: FusedPosition, imu: ImuData, history: List<GeoPoint>): NavigationUiState {
@@ -210,6 +271,8 @@ class NavigationViewModel(
             GnssState.TRANSITIONING -> GnssStatus.DEGRADED
             GnssState.INS_ONLY -> GnssStatus.INS_ONLY
         }
+
+        val calib = sensorBiasCalibrator.stateFlow.value
 
         return NavigationUiState(
             speedKmh = fused.speedMps * 3.6f,
@@ -242,7 +305,13 @@ class NavigationViewModel(
             classicalPathHistory = _classicalPathHistory.value,
             gpsPathHistory = _gpsPathHistory.value,
             isCourseUpMode = _isCourseUpMode.value,
-            isMountSlipped = alignmentEngine.isMountSlipped
+            isMountSlipped = alignmentEngine.isMountSlipped,
+            isCalibratingSensors = calib.isCalibrating,
+            isSensorCalibrated = calib.isCalibrated,
+            sensorCalibrationProgress = calib.progress,
+            sensorCalibrationCountdown = calib.secondsRemaining,
+            calibrationMovementDetected = calib.movementDetected,
+            isAiModelLoaded = aiEstimator.isModelLoaded
         )
     }
 

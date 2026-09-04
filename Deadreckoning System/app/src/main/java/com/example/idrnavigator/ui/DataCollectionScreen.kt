@@ -215,7 +215,11 @@ fun DataCollectionScreen(
                     Spacer(modifier = Modifier.height(10.dp))
                     Text(
                         text = if (uiState.deadReckoningMode == com.example.idrnavigator.fusion.DeadReckoningMode.AI_TCN) {
-                            "Model: tiny_tcn.onnx (ONNX Runtime Mobile)\nInput Tensor: [1, 11, 10] @ 10Hz | Latency: ${uiState.aiLatencyMs} ms\nRaw Predicted Speed: ${"%.1f".format(uiState.rawAiVelocityKmH)} km/h"
+                            if (uiState.isAiModelLoaded) {
+                                "Model: tiny_tcn.onnx (ONNX Runtime Mobile)\nInput Tensor: [1, 11, 10] @ 10Hz | Latency: ${uiState.aiLatencyMs} ms\nRaw Predicted Speed: ${"%.1f".format(uiState.rawAiVelocityKmH)} km/h"
+                            } else {
+                                "AI model unavailable; using Classical Strapdown"
+                            }
                         } else {
                             "Model: Classical Strapdown (Forward Accel Integration + 3D ZUPT)\nHeading: Gyro Z Integration + Mag Filter"
                         },

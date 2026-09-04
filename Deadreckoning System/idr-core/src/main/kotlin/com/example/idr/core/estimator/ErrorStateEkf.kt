@@ -42,6 +42,9 @@ class ErrorStateEkf(
         const val DEFAULT_R_VEL = 8.0f * 8.0f // TCN noise variance (~8 m/s)
         const val DEFAULT_R_GPS = 5.0f * 5.0f
 
+        /** Velocities below this threshold (~0.54 km/h) are treated as stationary noise */
+        const val VELOCITY_DEADBAND_MPS = 0.15f
+
         const val METERS_PER_DEGREE_LAT = 111320.0
     }
 
@@ -114,12 +117,18 @@ class ErrorStateEkf(
         val sinH = sin(heading)
         val cosH = cos(heading)
 
+        val effVx = if (kotlin.math.abs(vx) < VELOCITY_DEADBAND_MPS) 0f else vx
+        val effVy = if (kotlin.math.abs(vy) < VELOCITY_DEADBAND_MPS) 0f else vy
+
         // North-East frame: x = East, y = North
-        state[0] += (vx * sinH + vy * cosH) * dt // dx (East)
-        state[1] += (vx * cosH - vy * sinH) * dt // dy (North)
+        state[0] += (effVx * sinH + effVy * cosH) * dt // dx (East)
+        state[1] += (effVx * cosH - effVy * sinH) * dt // dy (North)
         state[2] += gyroMeas * dt // heading
         state[3] += axMeas * dt // forward velocity
         state[4] += ayMeas * dt // lateral velocity
+
+        if (state[3] < 0f || kotlin.math.abs(state[3]) < VELOCITY_DEADBAND_MPS) state[3] = 0f
+        if (kotlin.math.abs(state[4]) < VELOCITY_DEADBAND_MPS) state[4] = 0f
 
         // Keep heading in [-pi, pi]
         state[2] = normalizeAngleRad(state[2])
@@ -219,6 +228,11 @@ class ErrorStateEkf(
     fun updateZupt() {
         updateScalar(measuredIndex = 3, targetValue = 0f, variance = R_ZUPT)
         updateScalar(measuredIndex = 4, targetValue = 0f, variance = R_ZUPT)
+        // Hard-clamp velocity states so residual integration is strictly zeroed
+        state[3] = 0f
+        state[4] = 0f
+        P[3][3] = minOf(P[3][3], R_ZUPT)
+        P[4][4] = minOf(P[4][4], R_ZUPT)
         sanitizeState()
     }
 
@@ -391,7 +405,11 @@ class ErrorStateEkf(
     }
 
     val forwardVelocityMps: Float
-        get() = if (state[3].isNaN() || state[3].isInfinite()) 0f else state[3].coerceAtLeast(0f)
+        get() {
+            val v = state[3]
+            if (v.isNaN() || v.isInfinite() || v < VELOCITY_DEADBAND_MPS) return 0f
+            return v
+        }
 
     val headingDeg: Float
         get() {

@@ -34,6 +34,10 @@ enum class AppMapStyle(val title: String) {
     SATELLITE("Satellite View")
 }
 
+private const val MIN_MAP_ZOOM = 3.0
+// Level 18 can also return unavailable tiles in some areas, so keep the reliable ceiling at 17.
+private const val MAX_MAP_ZOOM = 17.0
+
 // ESRI World Street Map (Free, no API key required, high-speed CDN, no 403 blocks)
 class EsriStreetTileSource : OnlineTileSourceBase(
     "EsriStreetV2",
@@ -104,10 +108,13 @@ object MapTileSources {
 @Composable
 fun OsmMapController(
     uiState: NavigationUiState,
+    destination: GeoPoint? = null,
+    routePoints: List<GeoPoint> = emptyList(),
     modifier: Modifier = Modifier,
     mapStyle: AppMapStyle = AppMapStyle.DARK_COCKPIT,
     followVehicle: Boolean = true,
     onUserPan: () -> Unit = {},
+    onMapTap: (GeoPoint) -> Unit = {},
     onMapReady: (MapView) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -117,6 +124,13 @@ fun OsmMapController(
     var lastHistorySize by remember { mutableIntStateOf(0) }
     var lastClassicalSize by remember { mutableIntStateOf(0) }
     var lastGpsSize by remember { mutableIntStateOf(0) }
+    var lastHistoryLastPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var lastClassicalLastPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var lastGpsLastPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var lastCenteredPoint by remember { mutableStateOf<GeoPoint?>(null) }
+    var lastMapOrientation by remember { mutableStateOf(0f) }
+    var lastDestination by remember { mutableStateOf<GeoPoint?>(null) }
+    var lastRoutePoints by remember { mutableStateOf<List<GeoPoint>>(emptyList()) }
 
     val polyline = remember {
         Polyline().apply {
@@ -144,13 +158,24 @@ fun OsmMapController(
         }
     }
 
+    val routePolyline = remember {
+        Polyline().apply {
+            outlinePaint.color = routeColorFor(mapStyle)
+            outlinePaint.strokeWidth = 14f
+            outlinePaint.isAntiAlias = true
+            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(24f, 10f), 0f)
+        }
+    }
+
     val mapView = remember {
         MapView(context).apply {
             setTileSource(MapTileSources.getTileSource(mapStyle))
             setMultiTouchControls(true)
             isTilesScaledToDpi = true // High-DPI scaling: fast loading, sharp labels, 70% less network usage
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-            controller.setZoom(17.5)
+            setMinZoomLevel(MIN_MAP_ZOOM)
+            setMaxZoomLevel(MAX_MAP_ZOOM)
+            controller.setZoom(MAX_MAP_ZOOM)
             setUseDataConnection(true)
             isHorizontalMapRepetitionEnabled = false
             isVerticalMapRepetitionEnabled = false
@@ -169,6 +194,7 @@ fun OsmMapController(
             overlays.add(gpsPolyline)
             overlays.add(classicalPolyline)
             overlays.add(polyline)
+            overlays.add(routePolyline)
         }
     }
 
@@ -183,6 +209,7 @@ fun OsmMapController(
         } else {
             mapView.overlayManager.tilesOverlay.setColorFilter(null)
         }
+        routePolyline.outlinePaint.color = routeColorFor(mapStyle)
         mapView.invalidate()
     }
 
@@ -191,14 +218,26 @@ fun OsmMapController(
             mapView.overlays.add(it)
         }
     }
+    val destinationMarker = remember { DestinationMarker(mapView) }
 
     DisposableEffect(mapView) {
         onMapReady(mapView)
+        val gestureDetector = android.view.GestureDetector(
+            context,
+            object : android.view.GestureDetector.SimpleOnGestureListener() {
+                override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
+                    val tapped = mapView.projection.fromPixels(event.x.toInt(), event.y.toInt())
+                    onMapTap(GeoPoint(tapped.latitude, tapped.longitude))
+                    return false
+                }
+            }
+        )
         // Detect touch to release camera auto-follow smoothly
         mapView.setOnTouchListener { _, event ->
             if (event.action == MotionEvent.ACTION_MOVE || event.action == MotionEvent.ACTION_DOWN) {
                 onUserPan()
             }
+            gestureDetector.onTouchEvent(event)
             false
         }
         onDispose {
@@ -228,14 +267,21 @@ fun OsmMapController(
         update = { map ->
             if (uiState.hasFix || (uiState.gpsData.lat != 0.0 && uiState.gpsData.lon != 0.0)) {
                 val currentPoint = GeoPoint(uiState.gpsData.lat, uiState.gpsData.lon)
+                var mapChanged = false
 
                 // First time centering
                 if (!hasInitialCentered) {
                     map.controller.setCenter(currentPoint)
-                    map.controller.setZoom(17.5)
+                    map.controller.setZoom(MAX_MAP_ZOOM)
                     hasInitialCentered = true
-                } else if (followVehicle) {
+                    lastCenteredPoint = currentPoint
+                    mapChanged = true
+                } else if (followVehicle &&
+                    (lastCenteredPoint == null || lastCenteredPoint!!.distanceToAsDouble(currentPoint) >= 1.0)
+                ) {
                     map.controller.setCenter(currentPoint)
+                    lastCenteredPoint = currentPoint
+                    mapChanged = true
                 }
 
                 // Course-Up mode: rotate map so heading is "up"
@@ -245,35 +291,91 @@ fun OsmMapController(
                 } else {
                     0f
                 }
-                map.mapOrientation = targetOrientation
+                if (targetOrientation != lastMapOrientation) {
+                    map.mapOrientation = targetOrientation
+                    lastMapOrientation = targetOrientation
+                    mapChanged = true
+                }
 
                 // Update vehicle marker directly
-                vehicleMarker.updatePositionAndHeading(
+                mapChanged = vehicleMarker.updatePositionAndHeading(
                     currentPoint,
                     if (uiState.isCourseUpMode) 0f else uiState.headingDeg.toFloat()
-                )
+                ) || mapChanged
                 vehicleMarker.updateState(uiState.gnssState)
 
                 // Update AI track (primary cyan polyline)
-                if (uiState.locationHistory.size != lastHistorySize) {
+                val historyLastPoint = uiState.locationHistory.lastOrNull()
+                if (uiState.locationHistory.size != lastHistorySize ||
+                    historyLastPoint?.latitude != lastHistoryLastPoint?.latitude ||
+                    historyLastPoint?.longitude != lastHistoryLastPoint?.longitude
+                ) {
                     polyline.setPoints(uiState.locationHistory)
                     lastHistorySize = uiState.locationHistory.size
+                    lastHistoryLastPoint = historyLastPoint
+                    mapChanged = true
                 }
 
                 // Update Classical track (orange polyline)
-                if (uiState.classicalPathHistory.size != lastClassicalSize) {
+                val classicalLastPoint = uiState.classicalPathHistory.lastOrNull()
+                if (uiState.classicalPathHistory.size != lastClassicalSize ||
+                    classicalLastPoint?.latitude != lastClassicalLastPoint?.latitude ||
+                    classicalLastPoint?.longitude != lastClassicalLastPoint?.longitude
+                ) {
                     classicalPolyline.setPoints(uiState.classicalPathHistory)
                     lastClassicalSize = uiState.classicalPathHistory.size
+                    lastClassicalLastPoint = classicalLastPoint
+                    mapChanged = true
                 }
 
                 // Update GPS ground truth track (green polyline)
-                if (uiState.gpsPathHistory.size != lastGpsSize) {
+                val gpsLastPoint = uiState.gpsPathHistory.lastOrNull()
+                if (uiState.gpsPathHistory.size != lastGpsSize ||
+                    gpsLastPoint?.latitude != lastGpsLastPoint?.latitude ||
+                    gpsLastPoint?.longitude != lastGpsLastPoint?.longitude
+                ) {
                     gpsPolyline.setPoints(uiState.gpsPathHistory)
                     lastGpsSize = uiState.gpsPathHistory.size
+                    lastGpsLastPoint = gpsLastPoint
+                    mapChanged = true
                 }
 
+                if (mapChanged) map.invalidate()
+            }
+
+            var routeChanged = false
+            if (destination != lastDestination) {
+                routeChanged = true
+                lastDestination = destination
+            }
+            if (routePoints !== lastRoutePoints) {
+                routeChanged = true
+                lastRoutePoints = routePoints
+            }
+
+            if (routeChanged && destination != null) {
+                destinationMarker.setDestination(destination)
+                if (!map.overlays.contains(destinationMarker)) map.overlays.add(destinationMarker)
+            } else if (routeChanged) {
+                destinationMarker.setVisible(false)
+                map.overlays.remove(destinationMarker)
+            }
+
+            if (routeChanged) {
+                routePolyline.setPoints(routePoints)
+                if (routePoints.isNotEmpty()) {
+                    if (!map.overlays.contains(routePolyline)) map.overlays.add(routePolyline)
+                } else {
+                    map.overlays.remove(routePolyline)
+                }
                 map.invalidate()
             }
         }
     )
+}
+
+private fun routeColorFor(mapStyle: AppMapStyle): Int = when (mapStyle) {
+    AppMapStyle.STREET_MAP -> Color.rgb(28, 34, 42)
+    AppMapStyle.SATELLITE -> Color.rgb(255, 193, 7)
+    AppMapStyle.DARK_COCKPIT -> Color.rgb(79, 216, 232)
 }

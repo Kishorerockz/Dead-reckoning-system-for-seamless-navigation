@@ -67,7 +67,7 @@ class ImuSensorManager(context: Context) : SensorEventListener {
                     accelX = currentAccel[0], accelY = currentAccel[1], accelZ = currentAccel[2],
                     gyroX = currentGyro[0], gyroY = currentGyro[1], gyroZ = currentGyro[2],
                     magX = currentMag[0], magY = currentMag[1], magZ = currentMag[2],
-                    timestamp = System.currentTimeMillis()
+                    timestamp = event.timestamp / 1_000_000L
                 )
             }
             Sensor.TYPE_GYROSCOPE -> {

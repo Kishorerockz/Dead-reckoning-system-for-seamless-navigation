@@ -51,21 +51,28 @@ class AiPositionEstimator(
         if (imuWindow.isEmpty()) return smoothedVelocityMps
 
         try {
+            // Always feed IMU samples into rolling buffer so ONNX is continuously warm
+            for (sample in imuWindow) {
+                inputBuilder.addSample(sample)
+            }
+
             // 1. Check 3D Zero-Velocity Update (ZUPT)
             val isStationary = checkStationary(imuWindow)
             if (isStationary) {
                 ekf.updateZupt()
                 smoothedVelocityMps = 0f
                 rawPredictedKmH = 0f
+
+                // Allow EKF heading to track in-place rotation while velocity remains clamped
+                val latest = imuWindow.last()
+                val dt = if (imuWindow.size > 1) {
+                    (imuWindow.last().timestamp - imuWindow.first().timestamp).coerceAtLeast(10L) / 1000f
+                } else 0.05f
+                ekf.predict(axBody = 0f, ayBody = 0f, gzBody = latest.gyroZ, dt = dt)
                 return 0f
             }
 
-            // 2. Feed IMU window samples into the model rolling buffer
-            for (sample in imuWindow) {
-                inputBuilder.addSample(sample)
-            }
-
-            // 3. Run ONNX model if ready and loaded
+            // 2. Run ONNX model if ready and loaded
             if (onnxRunner.isModelLoaded && inputBuilder.isReady()) {
                 val flatTensor = inputBuilder.buildNormalizedFlatTensor(onnxRunner.mean, onnxRunner.scale)
                 if (flatTensor != null) {
@@ -73,12 +80,11 @@ class AiPositionEstimator(
                     val rawVelocityMps = rawPredictedKmH / 3.6f
 
                     // Check for NaN / Inf
-                    val safeVelocityMps = if (rawVelocityMps.isNaN() || rawVelocityMps.isInfinite()) {
-                        Log.w(TAG, "ONNX raw velocity returned NaN/Inf, falling back to 0")
+                    val safeVelocityMps = if (rawVelocityMps.isNaN() || rawVelocityMps.isInfinite() || rawVelocityMps < CoreDeadReckoner.VELOCITY_DEADBAND_MPS) {
                         0f
                     } else rawVelocityMps
 
-                    // 4. Update EKF with body acceleration, NHC, and TCN velocity aiding
+                    // 3. Update EKF with body acceleration, NHC, and TCN velocity aiding
                     val latest = imuWindow.last()
                     val dt = if (imuWindow.size > 1) {
                         (imuWindow.last().timestamp - imuWindow.first().timestamp).coerceAtLeast(10L) / 1000f
@@ -111,6 +117,7 @@ class AiPositionEstimator(
         headingDeg: Float,
         deltaTimeSeconds: Float
     ): LatLon {
+        if (velocity <= 0f || deltaTimeSeconds <= 0f) return lastPosition
         return classicalFallback.estimatePosition(lastPosition, velocity, headingDeg, deltaTimeSeconds)
     }
 
@@ -118,9 +125,10 @@ class AiPositionEstimator(
         var stationaryCount = 0
         for (data in imuWindow) {
             val accelMag = sqrt(data.accelX * data.accelX + data.accelY * data.accelY + data.accelZ * data.accelZ)
-            val gyroMag = sqrt(data.gyroX * data.gyroX + data.gyroY * data.gyroY + data.gyroZ * data.gyroZ)
-
-            if (abs(accelMag - GRAVITY) < ZUPT_ACCEL_THRESHOLD && gyroMag < ZUPT_GYRO_THRESHOLD) {
+            // Translational stationarity: Net acceleration is close to 1g (gravity),
+            // meaning the device is not undergoing linear forward/lateral translation.
+            // Even if the phone is rotated in hand (high gyro), translational motion is zero.
+            if (abs(accelMag - GRAVITY) < ZUPT_ACCEL_THRESHOLD) {
                 stationaryCount++
             }
         }

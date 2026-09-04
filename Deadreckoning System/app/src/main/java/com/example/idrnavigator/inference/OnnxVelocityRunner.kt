@@ -135,11 +135,20 @@ class OnnxVelocityRunner(private val context: Context) : AutoCloseable {
                 results.use { outputMap ->
                     val outputTensor = outputMap.get(0) as OnnxTensor
                     val rawPredictedKmH = outputTensor.floatBuffer.get(0)
+                    val elapsedNanos = System.nanoTime() - startTime
+                    // Round to nearest millisecond, ensuring at least 1ms when inference actually runs
+                    lastInferenceLatencyMs = kotlin.math.max(1L, (elapsedNanos + 500_000L) / 1_000_000L)
 
-                    lastInferenceLatencyMs = (System.nanoTime() - startTime) / 1_000_000L
+                    val clampedPrediction = if (rawPredictedKmH < 0f) 0f else rawPredictedKmH
+                    val displayedSpeedMps = clampedPrediction / 3.6f
+                    Log.d(
+                        TAG,
+                        "ONNX TinyTCN inference executed: rawOutput=${"%.4f".format(rawPredictedKmH)} km/h, " +
+                            "displayedSpeed=${"%.4f".format(displayedSpeedMps)} m/s, " +
+                            "latency=${"%.2f".format(elapsedNanos / 1_000_000.0)} ms"
+                    )
 
-                    // Clamp negative predictions (vehicles don't move backward in highway model)
-                    if (rawPredictedKmH < 0f) 0f else rawPredictedKmH
+                    clampedPrediction
                 }
             }
         } catch (e: Exception) {

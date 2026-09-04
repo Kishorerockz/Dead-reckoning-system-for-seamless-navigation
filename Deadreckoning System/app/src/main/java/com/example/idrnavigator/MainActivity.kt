@@ -8,6 +8,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -115,6 +116,7 @@ fun MainScreen(
     csvLogger: CsvLogger
 ) {
     var currentTab by remember { mutableStateOf(0) }
+    var mapStyle by rememberSaveable { mutableStateOf(com.example.idrnavigator.map.AppMapStyle.SATELLITE) }
     
     val context = LocalContext.current
     var hasPermissions by remember {
@@ -195,6 +197,8 @@ fun MainScreen(
         if (currentTab == 0) {
             NavigationHudScreen(
                 viewModel = navigationViewModel,
+                mapStyle = mapStyle,
+                onMapStyleChanged = { mapStyle = it },
                 modifier = Modifier.padding(innerPadding)
             )
         } else {

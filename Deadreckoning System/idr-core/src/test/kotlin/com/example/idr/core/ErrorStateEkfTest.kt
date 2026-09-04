@@ -80,4 +80,33 @@ class ErrorStateEkfTest {
         assertEquals("North position should converge to GPS fix", targetNorth.toFloat(), ekf.state[1], 3.0f)
         assertEquals("East position should converge to GPS fix", targetEast.toFloat(), ekf.state[0], 3.0f)
     }
+
+    @Test
+    fun testStationaryInPlaceRotationClamping() {
+        val ekf = ErrorStateEkf()
+        ekf.setOrigin(12.9716, 77.5946, 0f) // Initial heading North
+
+        // Simulate rotating phone in hand by 90 degrees over 2 seconds:
+        // gyroZ = 0.785 rad/s (45 deg/s), while forward/lateral accel are 0, and ZUPT clamped
+        ekf.updateZupt()
+
+        for (i in 0 until 20) {
+            ekf.predict(axBody = 0f, ayBody = 0f, gzBody = 0.785398f, dt = 0.1f)
+            ekf.updateZupt()
+        }
+
+        // Heading should have updated significantly (approx 90 degrees)
+        assertEquals("Heading should rotate", 90f, ekf.headingDeg, 5.0f)
+
+        // Velocity should remain strictly 0
+        assertEquals("Forward velocity must be clamped to 0", 0f, ekf.forwardVelocityMps, 1e-4f)
+
+        // Position coordinates MUST NOT move
+        assertEquals("East position must remain 0", 0f, ekf.state[0], 1e-4f)
+        assertEquals("North position must remain 0", 0f, ekf.state[1], 1e-4f)
+
+        val latLon = ekf.getEstimatedLatLon()
+        assertEquals("Latitude must not drift", 12.9716, latLon.lat, 1e-6)
+        assertEquals("Longitude must not drift", 77.5946, latLon.lon, 1e-6)
+    }
 }
